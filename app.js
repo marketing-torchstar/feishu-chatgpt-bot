@@ -2,11 +2,6 @@ const express = require('express');
 const lark = require('@larksuiteoapi/node-sdk');
 const axios = require('axios');
 const { Configuration, OpenAIApi } = require('openai');
-const fs = require('fs');
-const path = require('path');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
-ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 // 创建 Express 应用
 const app = express();
@@ -30,7 +25,6 @@ const openai = new OpenAIApi(configuration);
 const client = new lark.Client({
   appId: FEISHU_APP_ID,
   appSecret: FEISHU_APP_SECRET,
-  domain: lark.Domain.Feishu, // 确保设置为飞书域
   disableTokenCache: false,
 });
 
@@ -55,15 +49,41 @@ async function getOpenaiImageUrl(prompt) {
 // 回复消息，增加 uuid 参数
 async function reply(messageId, content, uuid) {
   try {
+    // 判断内容长度，选择消息类型
+    let msgType = 'text';
+    let msgContent = {};
+
+    if (content.length > 500) {
+      // 使用 post 类型消息
+      msgType = 'post';
+      msgContent = {
+        post: {
+          zh_cn: {
+            content: [
+              [
+                {
+                  tag: 'text',
+                  text: content,
+                },
+              ],
+            ],
+          },
+        },
+      };
+    } else {
+      // 使用 text 类型消息
+      msgContent = {
+        text: content,
+      };
+    }
+
     return await client.im.message.reply({
       path: {
         message_id: messageId,
       },
       data: {
-        content: JSON.stringify({
-          text: content,
-        }),
-        msg_type: 'text',
+        content: JSON.stringify(msgContent),
+        msg_type: msgType,
         uuid: uuid,
       },
     });
@@ -169,27 +189,6 @@ function doctor() {
   };
 }
 
-// 获取 Tenant Access Token
-async function getTenantAccessToken() {
-  try {
-    const res = await axios.post(
-      'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/',
-      {
-        app_id: FEISHU_APP_ID,
-        app_secret: FEISHU_APP_SECRET,
-      }
-    );
-    logger('Tenant Access Token Response:', res.data);
-    return res.data.tenant_access_token;
-  } catch (error) {
-    logger(
-      'Error retrieving tenant access token:',
-      error.response ? error.response.data : error
-    );
-    throw error;
-  }
-}
-
 // 处理回复
 async function handleReply(userInput, sessionId, messageId) {
   const question = userInput.text.replace('@_user_1', '').trim();
@@ -241,131 +240,21 @@ app.post('/webhook', async (req, res) => {
     const createTime = Number(params.event.message.create_time);
     const currentTime = Date.now();
     const timeDifference = currentTime - createTime;
-    if (timeDifference > 10000) {
+    if (timeDifference > 10000) { // 时间阈值可以根据需要调整
       logger('忽略历史消息', messageId);
       return res.status(200).send({ code: 0 });
     }
 
     // 私聊直接回复
     if (params.event.message.chat_type === 'p2p') {
-      // 处理文本消息
-      if (params.event.message.message_type === 'text') {
-        const userInput = JSON.parse(params.event.message.content);
-        await handleReply(userInput, sessionId, messageId);
+      // 不是文本消息，不处理
+      if (params.event.message.message_type !== 'text') {
+        await reply(messageId, '暂不支持处理此类型的消息。', messageId);
+        logger('不支持的消息类型');
         return res.status(200).send({ code: 0 });
       }
-
-      // 处理语音消息
-      if (params.event.message.message_type === 'audio') {
-        try {
-          // 获取文件 key
-          const fileContent = JSON.parse(params.event.message.content);
-          const fileKey = fileContent.file_key || fileContent.resource_id;
-          logger('提取的 fileKey:', fileKey);
-
-          // 获取 Tenant Access Token
-          const tenantAccessToken = await getTenantAccessToken();
-          if (!tenantAccessToken) {
-            logger('Tenant access token is undefined');
-            throw new Error('Failed to retrieve tenant access token');
-          }
-
-          // 构建请求 URL
-          const url = `https://open.feishu.cn/open-apis/im/v1/resources/${fileKey}/file`;
-          logger('请求 URL:', url);
-
-          // 获取文件内容
-          const axiosResponse = await axios.get(url, {
-            headers: {
-              Authorization: `Bearer ${tenantAccessToken}`,
-            },
-            responseType: 'stream',
-          });
-
-          // 检查响应的状态码
-          if (axiosResponse.status !== 200) {
-            let errorData = '';
-            axiosResponse.data.on('data', (chunk) => {
-              errorData += chunk;
-            });
-            await new Promise((resolve) => {
-              axiosResponse.data.on('end', resolve);
-            });
-            logger('文件下载失败，状态码:', axiosResponse.status);
-            logger('错误信息:', errorData);
-            throw new Error(`文件下载失败，状态码: ${axiosResponse.status}`);
-          }
-
-          // 保存文件到本地
-          const audioFilePath = path.join(
-            __dirname,
-            `audio_${messageId}.mp3`
-          ); // 使用原始格式
-          const writer = fs.createWriteStream(audioFilePath);
-          axiosResponse.data.pipe(writer);
-
-          // 等待文件下载完成
-          await new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-          });
-
-          // 转换音频格式为 mp3（如果需要，可以省略）
-          const convertedAudioPath = path.join(
-            __dirname,
-            `audio_${messageId}_converted.mp3`
-          );
-          await new Promise((resolve, reject) => {
-            ffmpeg(audioFilePath)
-              .toFormat('mp3')
-              .on('error', (err) => {
-                logger('音频格式转换错误:', err.message);
-                reject(err);
-              })
-              .on('end', () => {
-                logger('音频格式转换完成');
-                resolve();
-              })
-              .save(convertedAudioPath);
-          });
-
-          // 使用 OpenAI Whisper API 转换语音为文字
-          const transcriptionResponse = await openai.createTranscription(
-            fs.createReadStream(convertedAudioPath),
-            'whisper-1'
-          );
-
-          // 获取转换后的文字
-          const transcribedText = transcriptionResponse.data.text;
-          logger('语音转文字结果:', transcribedText);
-
-          // 处理转换后的文字
-          await handleReply(
-            { text: transcribedText },
-            sessionId,
-            messageId
-          );
-
-          // 删除临时音频文件
-          fs.unlinkSync(audioFilePath);
-          fs.unlinkSync(convertedAudioPath);
-
-          return res.status(200).send({ code: 0 });
-        } catch (e) {
-          if (e.response) {
-            logger('处理语音消息出错，状态码:', e.response.status);
-            logger('错误信息:', e.response.data);
-          } else {
-            logger('处理语音消息出错:', e.message);
-          }
-          await reply(messageId, '抱歉，无法处理您的语音消息。', messageId);
-          return res.status(200).send({ code: 0 });
-        }
-      }
-
-      // 不支持的消息类型
-      await reply(messageId, '暂不支持处理此类型的消息。', messageId);
-      logger('不支持的消息类型');
+      const userInput = JSON.parse(params.event.message.content);
+      await handleReply(userInput, sessionId, messageId);
       return res.status(200).send({ code: 0 });
     }
 
@@ -380,133 +269,15 @@ app.post('/webhook', async (req, res) => {
         return res.status(200).send({ code: 0 });
       }
       const botMentioned = params.event.message.mentions.some(
-        (mention) =>
-          mention.name === FEISHU_BOTNAME ||
-          mention.id === params.event.sender.sender_id.user_id
+        (mention) => mention.name === FEISHU_BOTNAME ||
+                     mention.id === params.event.sender.sender_id.user_id
       );
       if (!botMentioned) {
         logger('机器人未被提及，忽略消息');
         return res.status(200).send({ code: 0 });
       }
-
-      // 处理文本消息
-      if (params.event.message.message_type === 'text') {
-        const userInput = JSON.parse(params.event.message.content);
-        await handleReply(userInput, sessionId, messageId);
-        return res.status(200).send({ code: 0 });
-      }
-
-      // 处理语音消息
-      if (params.event.message.message_type === 'audio') {
-        try {
-          // 获取文件 key
-          const fileContent = JSON.parse(params.event.message.content);
-          const fileKey = fileContent.file_key || fileContent.resource_id;
-          logger('提取的 fileKey:', fileKey);
-
-          // 获取 Tenant Access Token
-          const tenantAccessToken = await getTenantAccessToken();
-          if (!tenantAccessToken) {
-            logger('Tenant access token is undefined');
-            throw new Error('Failed to retrieve tenant access token');
-          }
-
-          // 构建请求 URL
-          const url = `https://open.feishu.cn/open-apis/im/v1/resources/${fileKey}/file`;
-          logger('请求 URL:', url);
-
-          // 获取文件内容
-          const axiosResponse = await axios.get(url, {
-            headers: {
-              Authorization: `Bearer ${tenantAccessToken}`,
-            },
-            responseType: 'stream',
-          });
-
-          // 检查响应的状态码
-          if (axiosResponse.status !== 200) {
-            let errorData = '';
-            axiosResponse.data.on('data', (chunk) => {
-              errorData += chunk;
-            });
-            await new Promise((resolve) => {
-              axiosResponse.data.on('end', resolve);
-            });
-            logger('文件下载失败，状态码:', axiosResponse.status);
-            logger('错误信息:', errorData);
-            throw new Error(`文件下载失败，状态码: ${axiosResponse.status}`);
-          }
-
-          // 保存文件到本地
-          const audioFilePath = path.join(
-            __dirname,
-            `audio_${messageId}.mp3`
-          ); // 使用原始格式
-          const writer = fs.createWriteStream(audioFilePath);
-          axiosResponse.data.pipe(writer);
-
-          // 等待文件下载完成
-          await new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-          });
-
-          // 转换音频格式为 mp3（如果需要，可以省略）
-          const convertedAudioPath = path.join(
-            __dirname,
-            `audio_${messageId}_converted.mp3`
-          );
-          await new Promise((resolve, reject) => {
-            ffmpeg(audioFilePath)
-              .toFormat('mp3')
-              .on('error', (err) => {
-                logger('音频格式转换错误:', err.message);
-                reject(err);
-              })
-              .on('end', () => {
-                logger('音频格式转换完成');
-                resolve();
-              })
-              .save(convertedAudioPath);
-          });
-
-          // 使用 OpenAI Whisper API 转换语音为文字
-          const transcriptionResponse = await openai.createTranscription(
-            fs.createReadStream(convertedAudioPath),
-            'whisper-1'
-          );
-
-          // 获取转换后的文字
-          const transcribedText = transcriptionResponse.data.text;
-          logger('语音转文字结果:', transcribedText);
-
-          // 处理转换后的文字
-          await handleReply(
-            { text: transcribedText },
-            sessionId,
-            messageId
-          );
-
-          // 删除临时音频文件
-          fs.unlinkSync(audioFilePath);
-          fs.unlinkSync(convertedAudioPath);
-
-          return res.status(200).send({ code: 0 });
-        } catch (e) {
-          if (e.response) {
-            logger('处理语音消息出错，状态码:', e.response.status);
-            logger('错误信息:', e.response.data);
-          } else {
-            logger('处理语音消息出错:', e.message);
-          }
-          await reply(messageId, '抱歉，无法处理您的语音消息。', messageId);
-          return res.status(200).send({ code: 0 });
-        }
-      }
-
-      // 不支持的消息类型
-      await reply(messageId, '暂不支持处理此类型的消息。', messageId);
-      logger('不支持的消息类型');
+      const userInput = JSON.parse(params.event.message.content);
+      await handleReply(userInput, sessionId, messageId);
       return res.status(200).send({ code: 0 });
     }
   }
