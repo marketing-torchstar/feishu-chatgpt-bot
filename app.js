@@ -38,62 +38,31 @@ const sessions = {};
 
 // 获取 OpenAI 图片 URL
 async function getOpenaiImageUrl(prompt) {
-  try {
-    const resp = await openai.createImage({
-      prompt: prompt,
-      n: 1,
-      size: '1024x1024',
-    });
-    return resp.data.data[0].url;
-  } catch (e) {
-    logger('OpenAI 图片生成请求出错:', e.message);
-    return '抱歉，无法生成图片。';
-  }
+  const resp = await openai.createImage({
+    prompt: prompt,
+    n: 1,
+    size: '1024x1024',
+  });
+  return resp.data.data[0].url;
 }
 
-// 主动发送消息函数
-async function sendMessage(chatId, content) {
+// 回复消息，增加 uuid 参数
+async function reply(messageId, content, uuid) {
   try {
-    // 判断内容长度，选择消息类型
-    let msgType = 'text';
-    let msgContent = {};
-
-    if (content.length > 500) {
-      // 使用 post 类型消息
-      msgType = 'post';
-      msgContent = {
-        post: {
-          zh_cn: {
-            content: [
-              [
-                {
-                  tag: 'text',
-                  text: content,
-                },
-              ],
-            ],
-          },
-        },
-      };
-    } else {
-      // 使用 text 类型消息
-      msgContent = {
-        text: content,
-      };
-    }
-
-    return await client.im.message.create({
-      data: {
-        receive_id: chatId,
-        content: JSON.stringify(msgContent),
-        msg_type: msgType,
+    return await client.im.message.reply({
+      path: {
+        message_id: messageId,
       },
-      params: {
-        receive_id_type: 'chat_id',
+      data: {
+        content: JSON.stringify({
+          text: content,
+        }),
+        msg_type: 'text',
+        uuid: uuid,
       },
     });
   } catch (e) {
-    logger('发送消息到飞书失败:', e.message);
+    logger('发送消息到飞书失败', e);
   }
 }
 
@@ -130,25 +99,25 @@ async function cmdProcess(cmdParams) {
     const prompt = cmdParams.action.substring(6).trim();
     logger('生成图片提示词:', prompt);
     const url = await getOpenaiImageUrl(prompt);
-    await sendMessage(cmdParams.chatId, url);
+    await reply(cmdParams.messageId, url, cmdParams.messageId);
     return;
   }
   switch (cmdParams && cmdParams.action) {
     case '/help':
-      await cmdHelp(cmdParams.chatId);
+      await cmdHelp(cmdParams.messageId);
       break;
     case '/clear':
-      await cmdClear(cmdParams.sessionId, cmdParams.chatId);
+      await cmdClear(cmdParams.sessionId, cmdParams.messageId);
       break;
     default:
-      await cmdHelp(cmdParams.chatId);
+      await cmdHelp(cmdParams.messageId);
       break;
   }
   return { code: 0 };
 }
 
 // 帮助指令
-async function cmdHelp(chatId) {
+async function cmdHelp(messageId) {
   const helpText = `ChatGPT 指令使用指南
 
 Usage:
@@ -156,13 +125,13 @@ Usage:
 /help           获取更多帮助
 /image [提示词]  根据提示词生成图片
 `;
-  await sendMessage(chatId, helpText);
+  await reply(messageId, helpText, messageId);
 }
 
 // 清除记忆指令
-async function cmdClear(sessionId, chatId) {
+async function cmdClear(sessionId, messageId) {
   clearConversation(sessionId);
-  await sendMessage(chatId, '✅ 记忆已清除');
+  await reply(messageId, '✅ 记忆已清除', messageId);
 }
 
 // 获取 OpenAI 回复
@@ -175,7 +144,7 @@ async function getOpenAIReply(prompt) {
     // 返回回复内容
     return response.data.choices[0].message.content.trim();
   } catch (e) {
-    logger('OpenAI API 请求出错:', e.message);
+    logger('OpenAI API 请求出错:', e.response ? e.response.data : e);
     return '抱歉，我无法回答您的问题。';
   }
 }
@@ -195,17 +164,17 @@ function doctor() {
 }
 
 // 处理回复
-async function handleReply(userInput, sessionId, chatId) {
+async function handleReply(userInput, sessionId, messageId) {
   const question = userInput.text.replace('@_user_1', '').trim();
   logger('收到问题:', question);
   const action = question.trim();
   if (action.startsWith('/')) {
-    return await cmdProcess({ action, sessionId, chatId });
+    return await cmdProcess({ action, sessionId, messageId });
   }
   const prompt = buildConversation(sessionId, question);
   const openaiResponse = await getOpenAIReply(prompt);
   saveConversation(sessionId, question, openaiResponse);
-  await sendMessage(chatId, openaiResponse);
+  await reply(messageId, openaiResponse, messageId);
   return { code: 0 };
 }
 
@@ -250,20 +219,17 @@ app.post('/webhook', async (req, res) => {
       return res.status(200).send({ code: 0 });
     }
 
-    // 立即回复 200，避免超时
-    res.status(200).send({ code: 0 });
-
     // 私聊直接回复
     if (params.event.message.chat_type === 'p2p') {
       // 不是文本消息，不处理
       if (params.event.message.message_type !== 'text') {
-        await sendMessage(chatId, '暂不支持处理此类型的消息。');
+        await reply(messageId, '暂不支持处理此类型的消息。', messageId);
         logger('不支持的消息类型');
-        return;
+        return res.status(200).send({ code: 0 });
       }
       const userInput = JSON.parse(params.event.message.content);
-      await handleReply(userInput, sessionId, chatId);
-      return;
+      await handleReply(userInput, sessionId, messageId);
+      return res.status(200).send({ code: 0 });
     }
 
     // 群聊，需要 @ 机器人
@@ -274,7 +240,7 @@ app.post('/webhook', async (req, res) => {
         params.event.message.mentions.length === 0
       ) {
         logger('未提及机器人，忽略消息');
-        return;
+        return res.status(200).send({ code: 0 });
       }
       const botMentioned = params.event.message.mentions.some(
         (mention) => mention.name === FEISHU_BOTNAME ||
@@ -282,11 +248,11 @@ app.post('/webhook', async (req, res) => {
       );
       if (!botMentioned) {
         logger('机器人未被提及，忽略消息');
-        return;
+        return res.status(200).send({ code: 0 });
       }
       const userInput = JSON.parse(params.event.message.content);
-      await handleReply(userInput, sessionId, chatId);
-      return;
+      await handleReply(userInput, sessionId, messageId);
+      return res.status(200).send({ code: 0 });
     }
   }
 
