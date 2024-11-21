@@ -46,8 +46,8 @@ async function getOpenaiImageUrl(prompt) {
   return resp.data.data[0].url;
 }
 
-// 回复消息，增加 uuid 参数
-async function reply(messageId, content, uuid) {
+// 主动发送消息函数
+async function sendMessage(chatId, content) {
   try {
     // 判断内容长度，选择消息类型
     let msgType = 'text';
@@ -77,14 +77,14 @@ async function reply(messageId, content, uuid) {
       };
     }
 
-    return await client.im.message.reply({
-      path: {
-        message_id: messageId,
-      },
+    return await client.im.message.create({
       data: {
+        receive_id: chatId,
         content: JSON.stringify(msgContent),
         msg_type: msgType,
-        uuid: uuid,
+      },
+      params: {
+        receive_id_type: 'chat_id',
       },
     });
   } catch (e) {
@@ -125,25 +125,25 @@ async function cmdProcess(cmdParams) {
     const prompt = cmdParams.action.substring(6).trim();
     logger('生成图片提示词:', prompt);
     const url = await getOpenaiImageUrl(prompt);
-    await reply(cmdParams.messageId, url, cmdParams.messageId);
+    await sendMessage(cmdParams.chatId, url);
     return;
   }
   switch (cmdParams && cmdParams.action) {
     case '/help':
-      await cmdHelp(cmdParams.messageId);
+      await cmdHelp(cmdParams.chatId);
       break;
     case '/clear':
-      await cmdClear(cmdParams.sessionId, cmdParams.messageId);
+      await cmdClear(cmdParams.sessionId, cmdParams.chatId);
       break;
     default:
-      await cmdHelp(cmdParams.messageId);
+      await cmdHelp(cmdParams.chatId);
       break;
   }
   return { code: 0 };
 }
 
 // 帮助指令
-async function cmdHelp(messageId) {
+async function cmdHelp(chatId) {
   const helpText = `ChatGPT 指令使用指南
 
 Usage:
@@ -151,13 +151,13 @@ Usage:
 /help           获取更多帮助
 /image [提示词]  根据提示词生成图片
 `;
-  await reply(messageId, helpText, messageId);
+  await sendMessage(chatId, helpText);
 }
 
 // 清除记忆指令
-async function cmdClear(sessionId, messageId) {
+async function cmdClear(sessionId, chatId) {
   clearConversation(sessionId);
-  await reply(messageId, '✅ 记忆已清除', messageId);
+  await sendMessage(chatId, '✅ 记忆已清除');
 }
 
 // 获取 OpenAI 回复
@@ -190,17 +190,17 @@ function doctor() {
 }
 
 // 处理回复
-async function handleReply(userInput, sessionId, messageId) {
+async function handleReply(userInput, sessionId, chatId) {
   const question = userInput.text.replace('@_user_1', '').trim();
   logger('收到问题:', question);
   const action = question.trim();
   if (action.startsWith('/')) {
-    return await cmdProcess({ action, sessionId, messageId });
+    return await cmdProcess({ action, sessionId, chatId });
   }
   const prompt = buildConversation(sessionId, question);
   const openaiResponse = await getOpenAIReply(prompt);
   saveConversation(sessionId, question, openaiResponse);
-  await reply(messageId, openaiResponse, messageId);
+  await sendMessage(chatId, openaiResponse);
   return { code: 0 };
 }
 
@@ -245,17 +245,20 @@ app.post('/webhook', async (req, res) => {
       return res.status(200).send({ code: 0 });
     }
 
+    // 立即回复 200，避免超时
+    res.status(200).send({ code: 0 });
+
     // 私聊直接回复
     if (params.event.message.chat_type === 'p2p') {
       // 不是文本消息，不处理
       if (params.event.message.message_type !== 'text') {
-        await reply(messageId, '暂不支持处理此类型的消息。', messageId);
+        await sendMessage(chatId, '暂不支持处理此类型的消息。');
         logger('不支持的消息类型');
-        return res.status(200).send({ code: 0 });
+        return;
       }
       const userInput = JSON.parse(params.event.message.content);
-      await handleReply(userInput, sessionId, messageId);
-      return res.status(200).send({ code: 0 });
+      await handleReply(userInput, sessionId, chatId);
+      return;
     }
 
     // 群聊，需要 @ 机器人
@@ -266,7 +269,7 @@ app.post('/webhook', async (req, res) => {
         params.event.message.mentions.length === 0
       ) {
         logger('未提及机器人，忽略消息');
-        return res.status(200).send({ code: 0 });
+        return;
       }
       const botMentioned = params.event.message.mentions.some(
         (mention) => mention.name === FEISHU_BOTNAME ||
@@ -274,11 +277,11 @@ app.post('/webhook', async (req, res) => {
       );
       if (!botMentioned) {
         logger('机器人未被提及，忽略消息');
-        return res.status(200).send({ code: 0 });
+        return;
       }
       const userInput = JSON.parse(params.event.message.content);
-      await handleReply(userInput, sessionId, messageId);
-      return res.status(200).send({ code: 0 });
+      await handleReply(userInput, sessionId, chatId);
+      return;
     }
   }
 
