@@ -253,7 +253,9 @@ app.post('/webhook', async (req, res) => {
       if (params.event.message.message_type === 'audio') {
         try {
           // 获取文件 key
-          const fileKey = JSON.parse(params.event.message.content).file_key;
+          const fileContent = JSON.parse(params.event.message.content);
+          const fileKey = fileContent.file_key || fileContent.resource_id;
+          logger('提取的 fileKey:', fileKey);
 
           // 获取 Tenant Access Token
           const tenantAccessToken = await getTenantAccessToken();
@@ -262,12 +264,9 @@ app.post('/webhook', async (req, res) => {
             throw new Error('Failed to retrieve tenant access token');
           }
 
-          // 编码 messageId 和 fileKey
-          const encodedMessageId = encodeURIComponent(messageId);
-          const encodedFileKey = encodeURIComponent(fileKey);
-
           // 构建请求 URL
-          const url = `https://open.feishu.cn/open-apis/im/v1/messages/${encodedMessageId}/resources/${encodedFileKey}/fetch`;
+          const url = `https://open.feishu.cn/open-apis/im/v1/resources/${fileKey}/download`;
+          logger('请求 URL:', url);
 
           // 获取文件内容
           const axiosResponse = await axios.get(url, {
@@ -288,7 +287,7 @@ app.post('/webhook', async (req, res) => {
             writer.on('error', reject);
           });
 
-          // 转换音频格式为 mp3
+          // 转换音频格式为 mp3（如果需要，可以省略）
           const convertedAudioPath = path.join(__dirname, `audio_${messageId}_converted.mp3`);
           await new Promise((resolve, reject) => {
             ffmpeg(audioFilePath)
@@ -323,7 +322,7 @@ app.post('/webhook', async (req, res) => {
 
           return res.status(200).send({ code: 0 });
         } catch (e) {
-          logger('处理语音消息出错:', e.message, e.stack);
+          logger('处理语音消息出错:', e.response ? e.response.data : e.message);
           await reply(messageId, '抱歉，无法处理您的语音消息。', messageId);
           return res.status(200).send({ code: 0 });
         }
@@ -365,7 +364,9 @@ app.post('/webhook', async (req, res) => {
       if (params.event.message.message_type === 'audio') {
         try {
           // 获取文件 key
-          const fileKey = JSON.parse(params.event.message.content).file_key;
+          const fileContent = JSON.parse(params.event.message.content);
+          const fileKey = fileContent.file_key || fileContent.resource_id;
+          logger('提取的 fileKey:', fileKey);
 
           // 获取 Tenant Access Token
           const tenantAccessToken = await getTenantAccessToken();
@@ -374,12 +375,9 @@ app.post('/webhook', async (req, res) => {
             throw new Error('Failed to retrieve tenant access token');
           }
 
-          // 编码 messageId 和 fileKey
-          const encodedMessageId = encodeURIComponent(messageId);
-          const encodedFileKey = encodeURIComponent(fileKey);
-
           // 构建请求 URL
-          const url = `https://open.feishu.cn/open-apis/im/v1/messages/${encodedMessageId}/resources/${encodedFileKey}/fetch`;
+          const url = `https://open.feishu.cn/open-apis/im/v1/resources/${fileKey}/download`;
+          logger('请求 URL:', url);
 
           // 获取文件内容
           const axiosResponse = await axios.get(url, {
@@ -400,7 +398,7 @@ app.post('/webhook', async (req, res) => {
             writer.on('error', reject);
           });
 
-          // 转换音频格式为 mp3
+          // 转换音频格式为 mp3（如果需要，可以省略）
           const convertedAudioPath = path.join(__dirname, `audio_${messageId}_converted.mp3`);
           await new Promise((resolve, reject) => {
             ffmpeg(audioFilePath)
@@ -435,7 +433,7 @@ app.post('/webhook', async (req, res) => {
 
           return res.status(200).send({ code: 0 });
         } catch (e) {
-          logger('处理语音消息出错:', e.message, e.stack);
+          logger('处理语音消息出错:', e.response ? e.response.data : e.message);
           await reply(messageId, '抱歉，无法处理您的语音消息。', messageId);
           return res.status(200).send({ code: 0 });
         }
