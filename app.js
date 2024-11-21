@@ -172,14 +172,20 @@ function doctor() {
 // 获取 Tenant Access Token
 async function getTenantAccessToken() {
   try {
-    const res = await axios.post('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/', {
-      app_id: FEISHU_APP_ID,
-      app_secret: FEISHU_APP_SECRET,
-    });
+    const res = await axios.post(
+      'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/',
+      {
+        app_id: FEISHU_APP_ID,
+        app_secret: FEISHU_APP_SECRET,
+      }
+    );
     logger('Tenant Access Token Response:', res.data);
     return res.data.tenant_access_token;
   } catch (error) {
-    logger('Error retrieving tenant access token:', error.response ? error.response.data : error);
+    logger(
+      'Error retrieving tenant access token:',
+      error.response ? error.response.data : error
+    );
     throw error;
   }
 }
@@ -235,7 +241,7 @@ app.post('/webhook', async (req, res) => {
     const createTime = Number(params.event.message.create_time);
     const currentTime = Date.now();
     const timeDifference = currentTime - createTime;
-    if (timeDifference > 10000) { // 时间阈值可以根据需要调整
+    if (timeDifference > 10000) {
       logger('忽略历史消息', messageId);
       return res.status(200).send({ code: 0 });
     }
@@ -265,7 +271,7 @@ app.post('/webhook', async (req, res) => {
           }
 
           // 构建请求 URL
-          const url = `https://open.feishu.cn/open-apis/im/v1/resources/${fileKey}/download`;
+          const url = `https://open.feishu.cn/open-apis/im/v1/resources/${fileKey}/file`;
           logger('请求 URL:', url);
 
           // 获取文件内容
@@ -276,8 +282,25 @@ app.post('/webhook', async (req, res) => {
             responseType: 'stream',
           });
 
+          // 检查响应的状态码
+          if (axiosResponse.status !== 200) {
+            let errorData = '';
+            axiosResponse.data.on('data', (chunk) => {
+              errorData += chunk;
+            });
+            await new Promise((resolve) => {
+              axiosResponse.data.on('end', resolve);
+            });
+            logger('文件下载失败，状态码:', axiosResponse.status);
+            logger('错误信息:', errorData);
+            throw new Error(`文件下载失败，状态码: ${axiosResponse.status}`);
+          }
+
           // 保存文件到本地
-          const audioFilePath = path.join(__dirname, `audio_${messageId}.mp3`); // 使用原始格式
+          const audioFilePath = path.join(
+            __dirname,
+            `audio_${messageId}.mp3`
+          ); // 使用原始格式
           const writer = fs.createWriteStream(audioFilePath);
           axiosResponse.data.pipe(writer);
 
@@ -288,7 +311,10 @@ app.post('/webhook', async (req, res) => {
           });
 
           // 转换音频格式为 mp3（如果需要，可以省略）
-          const convertedAudioPath = path.join(__dirname, `audio_${messageId}_converted.mp3`);
+          const convertedAudioPath = path.join(
+            __dirname,
+            `audio_${messageId}_converted.mp3`
+          );
           await new Promise((resolve, reject) => {
             ffmpeg(audioFilePath)
               .toFormat('mp3')
@@ -314,7 +340,11 @@ app.post('/webhook', async (req, res) => {
           logger('语音转文字结果:', transcribedText);
 
           // 处理转换后的文字
-          await handleReply({ text: transcribedText }, sessionId, messageId);
+          await handleReply(
+            { text: transcribedText },
+            sessionId,
+            messageId
+          );
 
           // 删除临时音频文件
           fs.unlinkSync(audioFilePath);
@@ -322,7 +352,12 @@ app.post('/webhook', async (req, res) => {
 
           return res.status(200).send({ code: 0 });
         } catch (e) {
-          logger('处理语音消息出错:', e.response ? e.response.data : e.message);
+          if (e.response) {
+            logger('处理语音消息出错，状态码:', e.response.status);
+            logger('错误信息:', e.response.data);
+          } else {
+            logger('处理语音消息出错:', e.message);
+          }
           await reply(messageId, '抱歉，无法处理您的语音消息。', messageId);
           return res.status(200).send({ code: 0 });
         }
@@ -345,8 +380,9 @@ app.post('/webhook', async (req, res) => {
         return res.status(200).send({ code: 0 });
       }
       const botMentioned = params.event.message.mentions.some(
-        (mention) => mention.name === FEISHU_BOTNAME ||
-                     mention.id === params.event.sender.sender_id.user_id
+        (mention) =>
+          mention.name === FEISHU_BOTNAME ||
+          mention.id === params.event.sender.sender_id.user_id
       );
       if (!botMentioned) {
         logger('机器人未被提及，忽略消息');
@@ -376,7 +412,7 @@ app.post('/webhook', async (req, res) => {
           }
 
           // 构建请求 URL
-          const url = `https://open.feishu.cn/open-apis/im/v1/resources/${fileKey}/download`;
+          const url = `https://open.feishu.cn/open-apis/im/v1/resources/${fileKey}/file`;
           logger('请求 URL:', url);
 
           // 获取文件内容
@@ -387,8 +423,25 @@ app.post('/webhook', async (req, res) => {
             responseType: 'stream',
           });
 
+          // 检查响应的状态码
+          if (axiosResponse.status !== 200) {
+            let errorData = '';
+            axiosResponse.data.on('data', (chunk) => {
+              errorData += chunk;
+            });
+            await new Promise((resolve) => {
+              axiosResponse.data.on('end', resolve);
+            });
+            logger('文件下载失败，状态码:', axiosResponse.status);
+            logger('错误信息:', errorData);
+            throw new Error(`文件下载失败，状态码: ${axiosResponse.status}`);
+          }
+
           // 保存文件到本地
-          const audioFilePath = path.join(__dirname, `audio_${messageId}.mp3`); // 使用原始格式
+          const audioFilePath = path.join(
+            __dirname,
+            `audio_${messageId}.mp3`
+          ); // 使用原始格式
           const writer = fs.createWriteStream(audioFilePath);
           axiosResponse.data.pipe(writer);
 
@@ -399,7 +452,10 @@ app.post('/webhook', async (req, res) => {
           });
 
           // 转换音频格式为 mp3（如果需要，可以省略）
-          const convertedAudioPath = path.join(__dirname, `audio_${messageId}_converted.mp3`);
+          const convertedAudioPath = path.join(
+            __dirname,
+            `audio_${messageId}_converted.mp3`
+          );
           await new Promise((resolve, reject) => {
             ffmpeg(audioFilePath)
               .toFormat('mp3')
@@ -425,7 +481,11 @@ app.post('/webhook', async (req, res) => {
           logger('语音转文字结果:', transcribedText);
 
           // 处理转换后的文字
-          await handleReply({ text: transcribedText }, sessionId, messageId);
+          await handleReply(
+            { text: transcribedText },
+            sessionId,
+            messageId
+          );
 
           // 删除临时音频文件
           fs.unlinkSync(audioFilePath);
@@ -433,7 +493,12 @@ app.post('/webhook', async (req, res) => {
 
           return res.status(200).send({ code: 0 });
         } catch (e) {
-          logger('处理语音消息出错:', e.response ? e.response.data : e.message);
+          if (e.response) {
+            logger('处理语音消息出错，状态码:', e.response.status);
+            logger('错误信息:', e.response.data);
+          } else {
+            logger('处理语音消息出错:', e.message);
+          }
           await reply(messageId, '抱歉，无法处理您的语音消息。', messageId);
           return res.status(200).send({ code: 0 });
         }
