@@ -38,12 +38,17 @@ const sessions = {};
 
 // 获取 OpenAI 图片 URL
 async function getOpenaiImageUrl(prompt) {
-  const resp = await openai.createImage({
-    prompt: prompt,
-    n: 1,
-    size: '1024x1024',
-  });
-  return resp.data.data[0].url;
+  try {
+    const resp = await openai.createImage({
+      prompt: prompt,
+      n: 1,
+      size: '1024x1024',
+    });
+    return resp.data.data[0].url;
+  } catch (e) {
+    logger('OpenAI 图片生成请求出错:', e.message);
+    return '抱歉，无法生成图片。';
+  }
 }
 
 // 主动发送消息函数
@@ -88,7 +93,7 @@ async function sendMessage(chatId, content) {
       },
     });
   } catch (e) {
-    logger('发送消息到飞书失败', e);
+    logger('发送消息到飞书失败:', e.message);
   }
 }
 
@@ -170,7 +175,7 @@ async function getOpenAIReply(prompt) {
     // 返回回复内容
     return response.data.choices[0].message.content.trim();
   } catch (e) {
-    logger('OpenAI API 请求出错:', e.response ? e.response.data : e);
+    logger('OpenAI API 请求出错:', e.message);
     return '抱歉，我无法回答您的问题。';
   }
 }
