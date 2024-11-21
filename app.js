@@ -160,6 +160,12 @@ async function cmdClear(sessionId, chatId) {
   await sendMessage(chatId, '✅ 记忆已清除');
 }
 
+
+const openai = new OpenAIApi(configuration, {
+  timeout: 20000, // 设置 10 秒超时
+});
+
+
 // 获取 OpenAI 回复
 async function getOpenAIReply(prompt) {
   try {
