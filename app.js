@@ -17,6 +17,10 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-3.5-turbo';
 const OPENAI_MAX_TOKEN = parseInt(process.env.OPENAI_MAX_TOKEN) || 1024;
 
+// 定义模型的最大上下文长度和最大回复长度
+const MAX_CONTEXT_TOKENS = 128000; // 模型的最大上下文长度
+const MAX_COMPLETION_TOKENS = 16384; // 模型的最大回复长度
+
 // 初始化 OpenAI API
 const configuration = new Configuration({
   apiKey: OPENAI_KEY,
@@ -88,11 +92,12 @@ function saveConversation(sessionId, question, answer) {
   history.push({ role: 'assistant', content: answer });
   sessions[sessionId] = history;
 
+  // 定义可用于历史记录的最大 token 数量
+  const maxHistoryTokens = MAX_CONTEXT_TOKENS - MAX_COMPLETION_TOKENS;
+
   // 检查会话长度，超过限制则移除最早的消息
   let totalTokens = history.reduce((acc, msg) => acc + estimateTokens(msg.content), 0);
-  // 由于上下文长度包括输入和输出，需要确保总的 token 数量不超过模型的限制
-  const maxContextTokens = OPENAI_MAX_TOKEN;
-  while (totalTokens > maxContextTokens) {
+  while (totalTokens > maxHistoryTokens) {
     history.shift();
     totalTokens = history.reduce((acc, msg) => acc + estimateTokens(msg.content), 0);
   }
@@ -151,12 +156,17 @@ async function getOpenAIReply(prompt) {
     const totalTokens = prompt.reduce((acc, msg) => acc + estimateTokens(msg.content), 0);
 
     // 计算可用于生成回复的最大 token 数
-    const maxResponseTokens = OPENAI_MAX_TOKEN - totalTokens;
+    let availableTokens = MAX_CONTEXT_TOKENS - totalTokens;
+    let maxResponseTokens = Math.min(availableTokens, MAX_COMPLETION_TOKENS);
+
+    if (maxResponseTokens <= 0) {
+      return '抱歉，输入内容过长，我无法处理。';
+    }
 
     const response = await openai.createChatCompletion({
       model: OPENAI_MODEL,
       messages: prompt,
-      max_tokens: maxResponseTokens > 0 ? maxResponseTokens : 0, // 确保 max_tokens 为非负数
+      max_tokens: maxResponseTokens,
     });
     // 返回回复内容
     return response.data.choices[0].message.content.trim();
