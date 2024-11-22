@@ -241,7 +241,7 @@ app.post('/webhook', async (req, res) => {
     const createTime = Number(params.event.message.create_time);
     const currentTime = Date.now();
     const timeDifference = currentTime - createTime;
-    if (timeDifference > 10000) { // 时间阈值可以根据需要调整
+    if (timeDifference > 100000) { // 时间阈值可以根据需要调整
       logger('忽略历史消息', messageId);
       return res.status(200).send({ code: 0 });
     }
