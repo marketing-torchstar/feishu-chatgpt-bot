@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require('express'); 
 const lark = require('@larksuiteoapi/node-sdk');
 const axios = require('axios');
 const { Configuration, OpenAIApi } = require('openai');
@@ -76,6 +76,12 @@ function buildConversation(sessionId, question) {
   return history;
 }
 
+// 估算文本的 token 数量
+function estimateTokens(text) {
+  // 简单估算：假设平均每个 token 包含 4 个字符
+  return Math.ceil(text.length / 4);
+}
+
 // 保存对话
 function saveConversation(sessionId, question, answer) {
   let history = sessions[sessionId] || [];
@@ -83,10 +89,12 @@ function saveConversation(sessionId, question, answer) {
   sessions[sessionId] = history;
 
   // 检查会话长度，超过限制则移除最早的消息
-  let totalSize = history.reduce((acc, msg) => acc + msg.content.length, 0);
-  while (totalSize > OPENAI_MAX_TOKEN) {
+  let totalTokens = history.reduce((acc, msg) => acc + estimateTokens(msg.content), 0);
+  // 由于上下文长度包括输入和输出，需要确保总的 token 数量不超过模型的限制
+  const maxContextTokens = OPENAI_MAX_TOKEN;
+  while (totalTokens > maxContextTokens) {
     history.shift();
-    totalSize = history.reduce((acc, msg) => acc + msg.content.length, 0);
+    totalTokens = history.reduce((acc, msg) => acc + estimateTokens(msg.content), 0);
   }
 }
 
@@ -139,9 +147,16 @@ async function cmdClear(sessionId, messageId) {
 // 获取 OpenAI 回复
 async function getOpenAIReply(prompt) {
   try {
+    // 估算当前对话的 token 数量
+    const totalTokens = prompt.reduce((acc, msg) => acc + estimateTokens(msg.content), 0);
+
+    // 计算可用于生成回复的最大 token 数
+    const maxResponseTokens = OPENAI_MAX_TOKEN - totalTokens;
+
     const response = await openai.createChatCompletion({
       model: OPENAI_MODEL,
       messages: prompt,
+      max_tokens: maxResponseTokens > 0 ? maxResponseTokens : 0, // 确保 max_tokens 为非负数
     });
     // 返回回复内容
     return response.data.choices[0].message.content.trim();
